@@ -20,8 +20,10 @@
     <br><br>
     The traveler you were is dead. Step into the underworld.
   </p>
-  <button id="playButton" type="button">PLAY</button>
+  <div class="go" role="button" tabindex="0" aria-label="Play">PLAY</div>
 </div>
+
+
 
 <div id="hud" style="display:none;">
   <div id="titleBlock">
@@ -33,11 +35,8 @@
     <div id="districtName">—</div>
   </div>
   <div id="controls">
-    <button id="controlsToggle" type="button" aria-expanded="true">☰ CONTROLS</button>
-    <div class="controls-text">
-      <b>WASD</b> — move / drive &nbsp;&nbsp; <b>ARROW KEYS</b> — rotate camera<br>
-      <b>E</b> — enter or exit car &nbsp;&nbsp; <b>SCROLL</b> — zoom &nbsp;&nbsp; <b>LEFT-CLICK</b> — fire at cursor.
-    </div>
+    <b>WASD</b> / <b>ARROW KEYS</b> — move / drive &nbsp;&nbsp; <b>RIGHT-CLICK + DRAG</b> — rotate camera<br>
+    <b>E</b> — enter or exit car &nbsp;&nbsp; <b>SCROLL</b> — zoom &nbsp;&nbsp; <b>LEFT-CLICK</b> — fire at cursor.
   </div>
   <div id="crosshairInfo">POP. DENSITY: CRITICAL<br>AIR QUALITY: TOXIC</div>
   <div id="crosshair"></div>
