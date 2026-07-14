@@ -40,6 +40,7 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
 document.body.appendChild(renderer.domElement);
 
 window.addEventListener('resize', () => {
@@ -286,13 +287,18 @@ const poorWindowTexPool = [makeWindowTexture(6,8,true), makeWindowTexture(5,6,tr
 function makeFacadeMaterial(poor) {
   const tex = choice(poor ? poorWindowTexPool : richWindowTexPool);
   const baseColor = poor ? choice([0x453d4a, 0x3d3542, 0x4a4030, 0x323a3e]) : choice([0x2a2840, 0x2f2a45, 0x252038, 0x2c2440]);
-  return new THREE.MeshStandardMaterial({
+  const mat = new THREE.MeshStandardMaterial({
     color: baseColor, map: tex, emissive: 0xffffff, emissiveMap: tex,
-    emissiveIntensity: poor ? 0.5 : 0.85, roughness: poor ? 0.92 : 0.55, metalness: poor ? 0.05 : 0.35
+    emissiveIntensity: poor ? 0.5 : 0.85, roughness: poor ? 0.92 : 0.55, metalness: poor ? 0.05 : 0.35,
+    depthWrite: true, transparent: false, toneMapped: true
   });
+  mat.polygonOffset = true; mat.polygonOffsetFactor = -1; mat.polygonOffsetUnits = 1;
+  return mat;
 }
 function makeRoofMaterial(poor) {
-  return new THREE.MeshStandardMaterial({ color: poor ? 0x2c2630 : 0x211d34, roughness:0.9, metalness:0.15 });
+  const mat = new THREE.MeshStandardMaterial({ color: poor ? 0x2c2630 : 0x211d34, roughness:0.9, metalness:0.15, depthWrite: true, transparent: false });
+  mat.polygonOffset = true; mat.polygonOffsetFactor = -1; mat.polygonOffsetUnits = 1;
+  return mat;
 }
 
 function addTier(parent, baseY, w, h, d, poor) {
@@ -480,15 +486,31 @@ function addCrosswalksAndTrafficLights() {
   }
 }
 
+function isNearRoad(x, z) {
+  const lane = BLOCK * 0.5;
+  return Math.abs(x % BLOCK) < lane || Math.abs(z % BLOCK) < lane || Math.abs(x) < 18 || Math.abs(z) < 18;
+}
+
+function findSidewalkPosition() {
+  const candidates = buildingBoxes.filter(b => (b.maxX - b.minX) > 5 && (b.maxZ - b.minZ) > 5);
+  for (let i = 0; i < 24; i++) {
+    const box = choice(candidates);
+    const side = Math.random() < 0.5 ? -1 : 1;
+    const x = side < 0 ? box.minX - 2.2 : box.maxX + 2.2;
+    const z = rand(box.minZ + 1.2, box.maxZ - 1.2);
+    if (!collidesBuilding(x, z, 1.2) && !isNearRoad(x, z) && Math.hypot(x, z) > 28) return { x, z };
+  }
+  return null;
+}
+
 function addSlumProps() {
   const dumpsterMat = new THREE.MeshStandardMaterial({ color:0x30484a, roughness:.78, metalness:.45 });
   const lidMat = new THREE.MeshStandardMaterial({ color:0x223638, roughness:.7, metalness:.55 });
   const wheelMat = new THREE.MeshStandardMaterial({ color:0x111217, roughness:.9 });
   const graffitiMat = new THREE.MeshBasicMaterial({ color:0xff2fd0 });
-  for (let i=0; i<105; i++) {
-    let x=0, z=0, tries=0;
-    do { x=rand(-CITY_HALF+12,CITY_HALF-12); z=rand(-CITY_HALF+12,CITY_HALF-12); tries++; }
-    while ((Math.hypot(x,z) < 142 || isInsideBuilding(x,z)) && tries < 24);
+  for (let i=0; i<80; i++) {
+    const spot = findSidewalkPosition();
+    if (!spot) break;
     const g = new THREE.Group();
     const bin = new THREE.Mesh(new THREE.BoxGeometry(1.7,1.15,.82), dumpsterMat);
     bin.position.y=.62; bin.castShadow=bin.receiveShadow=true; g.add(bin);
@@ -502,14 +524,11 @@ function addSlumProps() {
       const tag = new THREE.Mesh(new THREE.PlaneGeometry(.75,.24), graffitiMat);
       tag.position.set(0,.72,.421); g.add(tag);
     }
-    g.position.set(x,0,z); g.rotation.y=rand(0,Math.PI*2); scene.add(g);
+    g.position.set(spot.x,0,spot.z); g.rotation.y=rand(0,Math.PI*2); scene.add(g);
   }
-  for (let i=0; i<42; i++) {
-    let x=0, z=0, tries=0;
-    do {
-      const angle=rand(0,Math.PI*2), radius=rand(148,CITY_HALF-18);
-      x=Math.cos(angle)*radius; z=Math.sin(angle)*radius; tries++;
-    } while (isInsideBuilding(x,z) && tries < 20);
+  for (let i=0; i<24; i++) {
+    const spot = findSidewalkPosition();
+    if (!spot) break;
     const g = new THREE.Group();
     const logMat = new THREE.MeshStandardMaterial({ color:0x2b1710, roughness:.95 });
     for (const rot of [0,Math.PI/2]) {
@@ -520,7 +539,7 @@ function addSlumProps() {
     const flame = new THREE.Mesh(new THREE.ConeGeometry(.44,1.35,7), flameMat);
     flame.position.y=.78; g.add(flame);
     const glow = new THREE.PointLight(0xff6125,2.2,12); glow.position.y=.8; g.add(glow);
-    g.position.set(x,0,z); scene.add(g);
+    g.position.set(spot.x,0,spot.z); scene.add(g);
     campfires.push({ flame, glow, phase:Math.random()*Math.PI*2 });
   }
 }
@@ -823,6 +842,113 @@ loadPedestrianModel('./rp-nathan-animated-003-walking/source/rp_nathan_animated_
 const vehicles = [];
 let currentVehicle = null;
 
+function createVehicleDriver(vehicle, color) {
+  const rig = buildCharacterRig(0.96, {
+    jacket: color,
+    pants: 0x1c1a24,
+    skin: 0xd9b48f,
+    hair: 0x1a1620,
+    accent: 0xff2fd0
+  });
+  const group = rig.group;
+  group.position.copy(vehicle.mesh.position);
+  group.rotation.copy(vehicle.mesh.rotation);
+  group.userData = {
+    rig,
+    type: 'driver',
+    collisionRadius: PEDESTRIAN_COLLISION_RADIUS,
+    isCriminal: true,
+    armed: true,
+    shootTimer: rand(1.2, 2.6),
+    home: new THREE.Vector3(),
+    roam: 10,
+    speed: rand(0.6, 1.2),
+    aiState: 'vehicle',
+    exitTimer: 0,
+    recoverTimer: 0,
+    fallSide: 1,
+    driverVehicle: vehicle
+  };
+  scene.add(group);
+  vehicle.driver = group;
+  return group;
+}
+
+function updateVehicleDrivers(dt) {
+  for (const vehicle of vehicles) {
+    if (!vehicle.driver) continue;
+    const driver = vehicle.driver;
+    const ud = driver.userData;
+    if (ud.aiState === 'vehicle') continue;
+    if (ud.aiState === 'exiting') {
+      ud.exitTimer -= dt;
+      const t = 1 - Math.max(0, ud.exitTimer / 0.8);
+      const forward = new THREE.Vector3(Math.sin(vehicle.mesh.rotation.y), 0, Math.cos(vehicle.mesh.rotation.y));
+      const exitPos = vehicle.mesh.position.clone().addScaledVector(forward, -1.15 + t * 0.7).add(new THREE.Vector3(0, 1.4 - t * 1.25, 0));
+      driver.position.copy(exitPos);
+      driver.rotation.y = vehicle.mesh.rotation.y + Math.PI * 0.5;
+      driver.position.y = Math.max(0.1, driver.position.y);
+      if (ud.exitTimer <= 0) {
+        ud.aiState = 'recovering';
+        ud.recoverTimer = 1.0;
+        driver.position.y = 0.1;
+      }
+      continue;
+    }
+    if (ud.aiState === 'recovering') {
+      ud.recoverTimer -= dt;
+      const t = 1 - Math.max(0, ud.recoverTimer / 1.0);
+      driver.position.y = Math.max(0, Math.sin(t * Math.PI) * 0.2);
+      driver.rotation.y = vehicle.mesh.rotation.y + Math.PI * 0.5;
+      if (ud.recoverTimer <= 0) {
+        ud.aiState = 'combat';
+        ud.home.copy(driver.position);
+        ud.roam = 12;
+        ud.changeTimer = rand(1.5, 3.5);
+        if (pedestrians.indexOf(driver) === -1) pedestrians.push(driver);
+      }
+      if (ud.armed && playerAlive && !endgameTriggered && t > 0.6) {
+        shootAtPlayer(driver);
+      }
+      continue;
+    }
+    if (ud.aiState !== 'combat') continue;
+    ud.changeTimer -= dt;
+    if (ud.changeTimer <= 0) {
+      ud.angle = Math.random() * Math.PI * 2;
+      ud.changeTimer = rand(2, 4);
+    }
+    const nx = driver.position.x + Math.sin(ud.angle) * ud.speed * dt;
+    const nz = driver.position.z + Math.cos(ud.angle) * ud.speed * dt;
+    const distFromHome = Math.hypot(nx - ud.home.x, nz - ud.home.z);
+    let moved = false;
+    if (!collides(nx, nz, ud.collisionRadius || PEDESTRIAN_COLLISION_RADIUS, driver) && distFromHome < ud.roam) {
+      driver.position.x = nx; driver.position.z = nz; driver.rotation.y = ud.angle; moved = true;
+    } else {
+      ud.angle = Math.random() * Math.PI * 2;
+    }
+    if (ud.armed && playerAlive && !endgameTriggered) {
+      ud.shootTimer -= dt;
+      const toPlayer = player.position.clone().sub(driver.position);
+      const distToPlayer = toPlayer.length();
+      if (ud.shootTimer <= 0) {
+        ud.shootTimer = rand(1.5, 3.2);
+        if (distToPlayer < 22) {
+          shootAtPlayer(driver);
+        }
+      }
+    }
+    if (ud.mixer) {
+      ud.mixer.update(moved ? dt : 0);
+    } else if (ud.modelled) {
+      driver.userData.modelWalkPhase += dt * ud.speed * 7;
+      driver.children[0].position.y = Math.abs(Math.sin(driver.userData.modelWalkPhase)) * (moved ? 0.035 : 0);
+    } else {
+      animateRig(ud.rig, dt, moved, ud.speed * 6);
+    }
+  }
+}
+
 function createVehicle(x, z, direction, speed, color) {
   const car = new THREE.Group();
   const paint = new THREE.MeshStandardMaterial({ color, roughness:.28, metalness:.65 });
@@ -853,7 +979,7 @@ function createVehicle(x, z, direction, speed, color) {
   car.position.set(x,.0,z);
   if (direction === 'x') car.rotation.y = Math.PI/2;
   scene.add(car);
-  const vehicle = { mesh:car, direction, speed, driveable:true, occupied:false };
+  const vehicle = { mesh:car, direction, speed, driveable:true, occupied:false, driver:null, driverExitTimer:0, driverRetaliateTimer:0 };
   vehicles.push(vehicle);
   return vehicle;
 }
@@ -1063,6 +1189,13 @@ function createCrashPlane() {
   g.visible = false; scene.add(g); return g;
 }
 crashPlane = createCrashPlane();
+let crashImpactTriggered = false;
+let crashImpactBuilding = null;
+let crashImpactFire = null;
+let wreckFire = null;
+let crashAudioContext = null;
+let crashMusicOsc = null;
+
 function createCrashFire() {
   const g = new THREE.Group();
   const flame = new THREE.Mesh(new THREE.ConeGeometry(1.35, 4.2, 8), new THREE.MeshBasicMaterial({ color:0xff542f, transparent:true, opacity:.9 }));
@@ -1070,7 +1203,87 @@ function createCrashFire() {
   const glow = new THREE.PointLight(0xff3b1f, 4, 26); glow.position.y = 2.5; g.add(glow);
   g.position.set(-2, 0, -2); g.visible = false; scene.add(g); return g;
 }
+
+function createWreckFire() {
+  const g = new THREE.Group();
+  const flames = [];
+  for (const offset of [[0,0,0],[0.8,0.2,0.4],[-0.6,0.1,-0.4],[0.4,0.3,-0.7]]) {
+    const flame = new THREE.Mesh(new THREE.ConeGeometry(0.45, 1.6, 7), new THREE.MeshBasicMaterial({ color:0xff7a2f, transparent:true, opacity:.92 }));
+    flame.position.set(...offset);
+    flame.scale.set(1.2, 1.4, 1.2);
+    g.add(flame);
+    flames.push(flame);
+  }
+  const glow = new THREE.PointLight(0xff512f, 6, 24); glow.position.set(0, 0.9, 0); g.add(glow);
+  g.visible = false; scene.add(g); return { group:g, flames, glow };
+}
+
 crashFire = createCrashFire();
+wreckFire = createWreckFire();
+
+function ensureCrashAudio() {
+  if (crashAudioContext) return crashAudioContext;
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) return null;
+  crashAudioContext = new AudioCtx();
+  return crashAudioContext;
+}
+
+function playCrashSound() {
+  const ctx = ensureCrashAudio();
+  if (!ctx) return;
+  const now = ctx.currentTime;
+  const master = ctx.createGain();
+  master.gain.setValueAtTime(0.18, now);
+  master.gain.exponentialRampToValueAtTime(0.001, now + 1.4);
+  master.connect(ctx.destination);
+  const osc = ctx.createOscillator();
+  osc.type = 'sawtooth';
+  osc.frequency.setValueAtTime(180, now);
+  osc.frequency.exponentialRampToValueAtTime(50, now + 0.34);
+  osc.connect(master);
+  osc.start(now);
+  osc.stop(now + 0.42);
+  const noise = ctx.createBufferSource();
+  const buffer = ctx.createBuffer(1, ctx.sampleRate * 0.25, ctx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / data.length, 2);
+  noise.buffer = buffer;
+  noise.connect(master);
+  noise.start(now);
+  noise.stop(now + 0.25);
+}
+
+function startCrashMusic() {
+  const ctx = ensureCrashAudio();
+  if (!ctx || crashMusicOsc) return;
+  const now = ctx.currentTime;
+  const master = ctx.createGain();
+  master.gain.setValueAtTime(0.03, now);
+  master.gain.linearRampToValueAtTime(0.06, now + 0.4);
+  master.connect(ctx.destination);
+  crashMusicOsc = ctx.createOscillator();
+  crashMusicOsc.type = 'sine';
+  crashMusicOsc.frequency.setValueAtTime(140, now);
+  crashMusicOsc.frequency.linearRampToValueAtTime(90, now + 2.6);
+  const filter = ctx.createBiquadFilter();
+  filter.type = 'lowpass'; filter.frequency.setValueAtTime(300, now); filter.Q.value = 1.2;
+  crashMusicOsc.connect(filter).connect(master);
+  crashMusicOsc.start(now);
+}
+
+function stopCrashMusic() {
+  if (!crashMusicOsc) return;
+  const ctx = crashAudioContext;
+  if (!ctx) return;
+  const now = ctx.currentTime;
+  const master = crashMusicOsc.disconnect ? crashMusicOsc : null;
+  if (crashMusicOsc) {
+    crashMusicOsc.frequency.linearRampToValueAtTime(45, now + 0.5);
+    crashMusicOsc.stop(now + 0.6);
+    crashMusicOsc = null;
+  }
+}
 
 function activeQuestTarget() {
   if (questStage === 0) return deliveryPickupPos;
@@ -1144,6 +1357,8 @@ window.addEventListener('mousemove', e => {
     camPitch = Math.max(0.12, Math.min(1.3, camPitch));
   }
 });
+
+// camera is controlled per-frame using the `keys` state (Arrow keys handled in updateCamera)
 renderer.domElement.addEventListener('wheel', e => {
   camDistance += e.deltaY * 0.01;
   camDistance = Math.max(3.5, Math.min(24, camDistance));
@@ -1171,7 +1386,17 @@ function toggleVehicle() {
     currentVehicle.occupied = true;
     currentVehicle.speed = 0;
     player.visible = false;
-    showHudMessage('VEHICLE ACQUIRED — WASD TO DRIVE, E TO EXIT');
+    if (!closest.driver) createVehicleDriver(closest, choice([0x7f2b2b, 0x2f3d7f, 0x1e5638]));
+    if (closest.driver) {
+      closest.driver.visible = true;
+      closest.driver.userData.aiState = 'exiting';
+      closest.driver.userData.exitTimer = 0.8;
+      closest.driver.userData.recoverTimer = 0;
+      closest.driver.position.copy(closest.mesh.position).add(new THREE.Vector3(0, 1.2, 0));
+      closest.driver.rotation.copy(closest.mesh.rotation);
+      closest.driver.rotation.y += Math.PI;
+    }
+    showHudMessage('VEHICLE HIJACKED — DRIVER BAILING OUT');
   } else showHudMessage('NO VEHICLE IN RANGE');
 }
 
@@ -1199,8 +1424,33 @@ function collidesCharacter(x, z, r, ignored) {
   return false;
 }
 
+function handleVehiclePedestrianCollision(vehicle, pedestrian) {
+  if (!pedestrian || !pedestrian.visible || pedestrian.userData.dead) return;
+  pedestrian.userData.dead = true;
+  pedestrian.userData.fallSide = Math.random() < 0.5 ? -1 : 1;
+  pedestrian.userData.isCriminal = false;
+  pedestrian.visible = false;
+  showHudMessage('PEDESTRIAN SQUASHED');
+}
+
 function collidesPlane(x, z, r) {
   return crashPlane && crashPlane.visible && Math.hypot(x - crashPlane.position.x, z - crashPlane.position.z) < r + crashPlane.userData.collisionRadius;
+}
+
+function planeHitsBuilding(pos, radius) {
+  for (const b of buildingBoxes) {
+    const nx = Math.max(b.minX, Math.min(pos.x, b.maxX));
+    const nz = Math.max(b.minZ, Math.min(pos.z, b.maxZ));
+    const dx = nx - pos.x;
+    const dz = nz - pos.z;
+    const dist = Math.sqrt(dx*dx + dz*dz);
+    if (dist < radius) {
+      // impact point on building surface
+      const impact = new THREE.Vector3(nx, Math.max(0.2, pos.y), nz);
+      return { box: b, impactPoint: impact };
+    }
+  }
+  return null;
 }
 
 function collides(x, z, r, ignored) {
@@ -1309,8 +1559,8 @@ updateSoundtrackControl();
 
 function updateDriving(dt) {
   const car = currentVehicle;
-  const throttle = (keys['KeyW'] || keys['ArrowUp'] ? 1 : 0) - (keys['KeyS'] || keys['ArrowDown'] ? 1 : 0);
-  const steer = (keys['KeyD'] || keys['ArrowRight'] ? 1 : 0) - (keys['KeyA'] || keys['ArrowLeft'] ? 1 : 0);
+  const throttle = (keys['KeyW'] ? 1 : 0) - (keys['KeyS'] ? 1 : 0);
+  const steer = (keys['KeyD'] ? 1 : 0) - (keys['KeyA'] ? 1 : 0);
   car.speed += throttle * 18 * dt;
   car.speed *= Math.pow(.13, dt);
   car.speed = Math.max(-8, Math.min(18, car.speed));
@@ -1319,6 +1569,14 @@ function updateDriving(dt) {
   const next = car.mesh.position.clone().addScaledVector(forward, car.speed * dt);
   if (!collidesBuilding(next.x, next.z, 1.75)) car.mesh.position.copy(next);
   else car.speed *= -.18;
+  for (const pedestrian of pedestrians) {
+    if (!pedestrian.visible || pedestrian.userData.dead) continue;
+    const dist = pedestrian.position.distanceTo(car.mesh.position);
+    if (dist < 1.8) {
+      handleVehiclePedestrianCollision(car, pedestrian);
+      car.speed *= 0.6;
+    }
+  }
   car.mesh.position.x = Math.max(-CITY_HALF+4, Math.min(CITY_HALF-4, car.mesh.position.x));
   car.mesh.position.z = Math.max(-CITY_HALF+4, Math.min(CITY_HALF-4, car.mesh.position.z));
   player.position.copy(car.mesh.position);
@@ -1340,10 +1598,10 @@ function updatePlayer(dt) {
     return;
   }
   let forward = 0, strafe = 0;
-  if (keys['KeyW'] || keys['ArrowUp']) forward += 1;
-  if (keys['KeyS'] || keys['ArrowDown']) forward -= 1;
-  if (keys['KeyD'] || keys['ArrowRight']) strafe += 1;
-  if (keys['KeyA'] || keys['ArrowLeft']) strafe -= 1;
+  if (keys['KeyW']) forward += 1;
+  if (keys['KeyS']) forward -= 1;
+  if (keys['KeyD']) strafe += 1;
+  if (keys['KeyA']) strafe -= 1;
 
   const dir = new THREE.Vector3(strafe, 0, -forward);
   playerMoving = dir.lengthSq() > 0;
@@ -1506,6 +1764,13 @@ function updateCamera() {
     return;
   }
   playerFill.position.set(player.position.x, 6, player.position.z);
+  // Arrow keys rotate the camera smoothly independent of movement
+  const camRotateSpeed = 2.6; // radians per second
+  const yawInput = (keys['ArrowRight'] ? 1 : 0) - (keys['ArrowLeft'] ? 1 : 0);
+  const pitchInput = (keys['ArrowUp'] ? 1 : 0) - (keys['ArrowDown'] ? 1 : 0);
+  camYaw += yawInput * camRotateSpeed * (dt || 0.016);
+  camPitch += pitchInput * (camRotateSpeed * 0.45) * (dt || 0.016);
+  camPitch = Math.max(0.12, Math.min(1.3, camPitch));
   const targetPos = new THREE.Vector3(
     player.position.x + Math.sin(camYaw) * Math.cos(camPitch) * camDistance,
     player.position.y + 2.4 + Math.sin(camPitch) * camDistance,
@@ -1519,6 +1784,7 @@ function updateCamera() {
 function updatePedestrians(dt) {
   for (const p of pedestrians) {
     const ud = p.userData;
+    if (ud.type === 'driver') continue;
     if (ud.dead) {
       // Ease the body onto the pavement and leave it there as a readable
       // consequence of a successful shot.
@@ -1578,14 +1844,15 @@ function animate() {
   requestAnimationFrame(animate);
   const dt = Math.min(clock.getDelta(), 0.05);
   updatePlayer(dt);
-  updateCamera();
+  updateCamera(dt);
   updatePedestrians(dt);
+  updateVehicleDrivers(dt);
   updateVehicles(dt);
   updateBullets(dt);
   updatePlayerShots(dt);
   updateCrashCutscene(dt);
   updateStreetProps(clock.elapsedTime);
-  updateWaypoint();
+  function updateCamera(dt) {
   if (mapVisible) drawMap();
   renderer.render(scene, camera);
 }
@@ -1594,43 +1861,78 @@ function updateVehicles(dt) {
   for (const v of vehicles) {
     if (v.occupied) continue;
     const mv = v.mesh;
-    if (v.direction === 'x') {
-      mv.position.x += v.speed * dt;
-      if (mv.position.x > CITY_HALF + 24) mv.position.x = -CITY_HALF - 24;
-      if (mv.position.x < -CITY_HALF - 24) mv.position.x = CITY_HALF + 24;
-    } else {
-      mv.position.z += v.speed * dt;
-      if (mv.position.z > CITY_HALF + 24) mv.position.z = -CITY_HALF - 24;
-      if (mv.position.z < -CITY_HALF - 24) mv.position.z = CITY_HALF + 24;
-    }
+  // Arrow keys rotate the camera smoothly independent of movement
+  const camRotateSpeed = 2.6; // radians per second
+  const yawInput = (keys['ArrowRight'] ? 1 : 0) - (keys['ArrowLeft'] ? 1 : 0);
+  const pitchInput = (keys['ArrowUp'] ? 1 : 0) - (keys['ArrowDown'] ? 1 : 0);
+  camYaw += yawInput * camRotateSpeed * (dt || 0.016);
+  camPitch += pitchInput * (camRotateSpeed * 0.45) * (dt || 0.016);
+  camPitch = Math.max(0.12, Math.min(1.3, camPitch));
+  const targetPos = new THREE.Vector3(
+    player.position.x + Math.sin(camYaw) * Math.cos(camPitch) * camDistance,
+    player.position.y + 2.4 + Math.sin(camPitch) * camDistance,
+    player.position.z + Math.cos(camYaw) * Math.cos(camPitch) * camDistance
+  );
   }
 }
 
 function updateCrashCutscene(dt) {
   if (!cutsceneActive) return;
   cutsceneElapsed += dt;
-  // A descending, corkscrewing aircraft crosses the city and impacts the spawn plaza.
   const t = Math.min(cutsceneElapsed / 6.2, 1);
-  crashPlane.position.set(42 - 46*t, 60*(1-t)*(1-t) + 2, -50 + 48*t);
-  crashPlane.rotation.set(.18 + t*1.2, t*1.8, -.22 - t*1.5);
-  // The player ejects during the final approach, visibly falling beside the plane.
+  crashPlane.position.set(42 - 46 * t, 60 * (1 - t) * (1 - t) + 2, -50 + 48 * t);
+  crashPlane.rotation.set(.18 + t * 1.2, t * 1.8, -.22 - t * 1.5);
+  // Check for collision with generated buildings during approach
+  if (!crashImpactTriggered) {
+    const hit = planeHitsBuilding(crashPlane.position, crashPlane.userData.collisionRadius || 4.45);
+    if (hit) {
+      crashImpactTriggered = true;
+      // snap plane to impact point and create immediate impact effects
+      crashPlane.position.copy(hit.impactPoint).add(new THREE.Vector3(-1.2, 0.6, -0.6));
+      crashPlane.rotation.set(.18, 0.6, -0.4);
+      crashPlane.visible = true;
+      // create a focused fire on the building face
+      crashFire.position.copy(hit.impactPoint).add(new THREE.Vector3(0, 1.6, 0));
+      crashFire.visible = true;
+      playCrashSound();
+      startCrashMusic();
+    }
+  }
   if (cutsceneElapsed > 2.0) {
     const fall = Math.min((cutsceneElapsed - 2.0) / 3.5, 1);
-    player.position.copy(crashPlane.position).add(new THREE.Vector3(2.2, -2.5 - 7*fall, 1.5));
+    player.position.copy(crashPlane.position).add(new THREE.Vector3(2.2, -2.5 - 7 * fall, 1.5));
     player.rotation.z = fall * .9;
   }
   if (cutsceneElapsed > 3.7) {
     const text = document.getElementById('cutsceneText');
     if (text) text.textContent = 'IMPACT IMMINENT — EJECT NOW';
   }
+  if (cutsceneElapsed > 4.4 && !crashImpactTriggered) {
+    crashImpactTriggered = true;
+    const impactPoint = new THREE.Vector3(-8, 0.2, -8);
+    crashPlane.position.copy(impactPoint).add(new THREE.Vector3(-1.4, 0.4, -0.8));
+    crashPlane.rotation.set(.12, .55, -.38);
+    crashImpactBuilding = new THREE.Mesh(new THREE.BoxGeometry(5.5, 8, 5.5), new THREE.MeshStandardMaterial({ color: 0x1e1a24, roughness: 0.95 }));
+    crashImpactBuilding.position.copy(impactPoint).add(new THREE.Vector3(0, 4, 0));
+    scene.add(crashImpactBuilding);
+    crashFire.position.copy(impactPoint).add(new THREE.Vector3(0, 1.8, 0));
+    crashFire.visible = true;
+    playCrashSound();
+    startCrashMusic();
+  }
   if (cutsceneElapsed < 5.5) return;
-  // Leave the wreck in the plaza so it remains a physical world object after
-  // the opening sequence, instead of disappearing once the camera cuts away.
   crashPlane.position.set(-8, 0.7, -8);
   crashPlane.rotation.set(.12, .55, -.38);
   crashPlane.visible = true;
-  crashFire.position.set(-8, 0, -8);
-  crashFire.visible = true;
+  crashFire.visible = false;
+  wreckFire.group.visible = true;
+  wreckFire.group.position.copy(crashPlane.position).add(new THREE.Vector3(-0.4, -0.2, 0.2));
+  wreckFire.group.quaternion.copy(crashPlane.quaternion);
+  wreckFire.group.children.forEach((child, index) => {
+    child.scale.setScalar(1.1 + index * 0.08);
+  });
+  playCrashSound();
+  stopCrashMusic();
   player.position.set(0, 0, 0);
   player.rotation.set(0, 0, 0);
   cutsceneActive = false;
@@ -1697,9 +1999,18 @@ window.addEventListener('keydown', e => {
 });
 
 const introEl = document.getElementById('intro');
-if (introEl) {
-  introEl.addEventListener('click', () => {
-    introEl.style.display = 'none';
+const playButtonEl = document.getElementById('playButton');
+const controlsEl = document.getElementById('controls');
+const controlsToggleEl = document.getElementById('controlsToggle');
+if (controlsToggleEl && controlsEl) {
+  controlsToggleEl.addEventListener('click', () => {
+    const collapsed = controlsEl.classList.toggle('collapsed');
+    controlsToggleEl.setAttribute('aria-expanded', String(!collapsed));
+  });
+}
+if (playButtonEl) {
+  playButtonEl.addEventListener('click', () => {
+    if (introEl) introEl.style.display = 'none';
     const hudEl = document.getElementById('hud');
     if (hudEl) hudEl.style.display = 'block';
     const cutsceneEl = document.getElementById('cutscene');
@@ -1709,6 +2020,9 @@ if (introEl) {
     crashPlane.visible = true;
     cutsceneActive = true;
     cutsceneElapsed = 0;
+    crashImpactTriggered = false;
+    crashFire.visible = false;
+    wreckFire.group.visible = false;
     startSoundtrack();
     updateQuestUI();
     renderer.domElement.focus();

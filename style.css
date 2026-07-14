@@ -27,13 +27,19 @@
   #district .label { font-size:10px; color:#7fffd4; text-shadow:0 0 6px #7fffd4; }
 
   #controls {
-    position:fixed; bottom:16px; left:20px; pointer-events:none;
+    position:fixed; bottom:16px; left:20px; pointer-events:auto;
     font-size:11px; line-height:1.6; color:#b9f8ff; background:rgba(5,2,15,0.55);
     border:1px solid rgba(56,244,255,0.35); border-radius:6px; padding:10px 14px;
     box-shadow: 0 0 14px rgba(56,244,255,0.2);
-    letter-spacing:1px;
+    letter-spacing:1px; display:flex; align-items:flex-start; gap:10px; max-width:560px;
   }
   #controls b { color:#ff2fd0; }
+  #controlsToggle {
+    border:1px solid rgba(255,210,63,.62); border-radius:4px; padding:8px 10px; background:rgba(7,4,17,.78);
+    color:#ffd23f; cursor:pointer; font:11px 'Courier New', monospace; letter-spacing:1px; white-space:nowrap;
+  }
+  #controls.collapsed .controls-text { display:none; }
+  #controls.collapsed { padding:8px 10px; }
 
   #crosshairInfo {
     position:fixed; bottom:16px; right:24px; pointer-events:none;
@@ -117,10 +123,10 @@
   }
   #intro h2 { font-size:14px; letter-spacing:8px; color:#38f4ff; text-shadow:0 0 10px #38f4ff; margin:0 0 30px 0; font-weight:400;}
   #intro p { max-width:640px; font-size:14px; line-height:1.8; color:#c9d6ff; letter-spacing:0.5px; }
-  #intro .go {
+  #playButton {
     margin-top:34px; font-size:13px; letter-spacing:4px; color:#ffd23f;
     text-shadow:0 0 10px #ffd23f; animation: pulse 1.6s infinite ease-in-out;
-    border:1px solid #ffd23f; padding:12px 30px; border-radius:2px;
+    border:1px solid #ffd23f; padding:12px 30px; border-radius:2px; background:transparent; cursor:pointer;
   }
   #cutscene {
     position:fixed; inset:0; z-index:90; pointer-events:none;
