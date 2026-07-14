@@ -222,6 +222,7 @@ function buildCharacterRig(scale, colors) {
 
   return {
     group: rig,
+    hips,
     walkTime: Math.random()*10,
     parts: { leftShoulder, rightShoulder, leftHip, rightHip }
   };
@@ -991,6 +992,143 @@ scene.add(player);
 let playerMoving = false;
 
 // ---------------------------------------------------------------------------
+// PLAYER MODEL + MIXAMO ANIMATION SYSTEM
+// ---------------------------------------------------------------------------
+// The visible player body is the Ch22_nonPBR Mixamo character. Every Mixamo
+// asset here (the character, Walking, Falling Back Death) shares the identical
+// `mixamorig` skeleton, so animation clips retarget onto the character simply
+// by binding an AnimationMixer to it — no manual bone remapping required.
+// The procedural rig built above stays as a fallback: it is shown until the
+// FBX finishes downloading and remains the body if the model fails to load.
+const PLAYER_MODEL_HEIGHT = 1.95;
+let playerModel = null;
+let playerMixer = null;
+const playerActions = {};   // idle | walk | death
+let playerAnimState = null;
+
+// Remove the root-bone translation so a locomotion clip animates "in place":
+// the character's world position is driven by the movement code, not the clip.
+function stripRootMotion(clip) {
+  if (!clip) return clip;
+  clip.tracks = clip.tracks.filter(t => !/Hips\.(position)$/i.test(t.name));
+  return clip;
+}
+
+// Cross-fade helper — the single entry point for changing the player's pose.
+function setPlayerAction(name, fade = 0.25) {
+  if (!playerMixer || !playerActions[name] || playerAnimState === name) return;
+  const next = playerActions[name];
+  const prev = playerAnimState ? playerActions[playerAnimState] : null;
+  next.reset();
+  next.enabled = true;
+  next.play();
+  if (prev && prev !== next) {
+    next.fadeIn(fade);
+    prev.fadeOut(fade);
+  } else {
+    next.setEffectiveWeight(1);
+  }
+  playerAnimState = name;
+}
+
+// Chooses and advances the correct clip every frame. Falls back to the
+// procedural limb swing while the model is still loading.
+function updatePlayerAnimation(dt, moving, sprinting) {
+  if (!playerMixer) { animateRig(playerRig, dt, moving, sprinting ? 12 : 9); return; }
+  if (!playerAlive) {
+    setPlayerAction('death', 0.15);
+  } else if (moving) {
+    setPlayerAction('walk', 0.2);
+    if (playerActions.walk) playerActions.walk.setEffectiveTimeScale(sprinting ? 1.7 : 1.05);
+  } else {
+    setPlayerAction('idle', 0.25);
+    // When there is no dedicated idle clip we hold frame 0 of the walk clone.
+    if (playerAnimState === 'idle' && playerActions.idle &&
+        playerActions.idle.getClip().name === 'idle-fallback') {
+      playerActions.idle.setEffectiveTimeScale(0);
+    }
+  }
+  playerMixer.update(dt);
+}
+
+function setupPlayerModel(model, walkClip, deathClip, idleClip) {
+  // Normalize the raw Mixamo scale (centimetres) to the game's metre scale and
+  // drop the model so its feet rest on the ground plane.
+  const box = new THREE.Box3().setFromObject(model);
+  const height = Math.max(0.01, box.max.y - box.min.y);
+  model.scale.setScalar(PLAYER_MODEL_HEIGHT / height);
+  model.updateMatrixWorld(true);
+  const grounded = new THREE.Box3().setFromObject(model);
+  model.position.y -= grounded.min.y;
+  model.traverse(child => {
+    if (child.isMesh) {
+      child.castShadow = true;
+      child.receiveShadow = true;
+      child.frustumCulled = false; // skinned bounds change every frame
+    }
+  });
+
+  player.add(model);
+  playerModel = model;
+  playerRig.hips.visible = false; // hide the procedural stand-in body
+
+  playerMixer = new THREE.AnimationMixer(model);
+  if (walkClip) {
+    walkClip.name = 'walk';
+    playerActions.walk = playerMixer.clipAction(walkClip);
+  }
+  if (deathClip) {
+    deathClip.name = 'death';
+    const death = playerMixer.clipAction(deathClip);
+    death.setLoop(THREE.LoopOnce);
+    death.clampWhenFinished = true; // stay collapsed on the last frame
+    playerActions.death = death;
+  }
+  if (idleClip) {
+    playerActions.idle = playerMixer.clipAction(idleClip);
+  }
+  setPlayerAction(playerActions.idle ? 'idle' : (playerActions.walk ? 'walk' : 'idle'), 0);
+}
+
+(function loadPlayerModel() {
+  if (!THREE.FBXLoader) {
+    console.warn('FBXLoader unavailable; player keeps the procedural rig.');
+    return;
+  }
+  const loader = new THREE.FBXLoader();
+  const loaded = {};
+  let pending = 3;
+  const done = () => {
+    if (--pending > 0) return;
+    if (!loaded.model) {
+      console.warn('Ch22_nonPBR failed to load; player keeps the procedural rig.');
+      return;
+    }
+    const walkClip = loaded.walk && loaded.walk.animations[0]
+      ? stripRootMotion(loaded.walk.animations[0]) : null;
+    const deathClip = loaded.death && loaded.death.animations[0]
+      ? loaded.death.animations[0] : null;
+    // Prefer an idle baked into the character; otherwise hold a neutral frame
+    // of the walk clip so the player stands naturally instead of in a T-pose.
+    let idleClip = loaded.model.animations && loaded.model.animations[0] &&
+      loaded.model.animations[0].duration > 0.1 ? loaded.model.animations[0] : null;
+    if (!idleClip && walkClip) {
+      idleClip = walkClip.clone();
+      idleClip.name = 'idle-fallback';
+    } else if (idleClip) {
+      idleClip.name = 'idle';
+    }
+    setupPlayerModel(loaded.model, walkClip, deathClip, idleClip);
+  };
+  loader.load('./Ch22_nonPBR.fbx', m => { loaded.model = m; done(); },
+    undefined, e => { console.warn('Ch22_nonPBR load error', e); done(); });
+  loader.load('./Walking.fbx', m => { loaded.walk = m; done(); },
+    undefined, e => { console.warn('Walking load error', e); done(); });
+  loader.load('./Falling Back Death.fbx', m => { loaded.death = m; done(); },
+    undefined, e => { console.warn('Falling Back Death load error', e); done(); });
+})();
+
+// ---------------------------------------------------------------------------
 // OPENING CRASH + CONTRACTS
 // ---------------------------------------------------------------------------
 // These are gameplay objects, not just text: each contract changes the active
@@ -1324,7 +1462,7 @@ function updateDriving(dt) {
   player.position.copy(car.mesh.position);
   player.rotation.y = car.mesh.rotation.y;
   playerMoving = false;
-  animateRig(playerRig, dt, false, 0);
+  updatePlayerAnimation(dt, false, false);
   if (questStage === 0 && player.position.distanceTo(deliveryPickupPos) < 3) advanceQuest();
   if (questStage === 1 && player.position.distanceTo(deliveryDropPos) < 3) advanceQuest();
 }
@@ -1332,7 +1470,13 @@ function updateDriving(dt) {
 function updatePlayer(dt) {
   if (controlLocked) {
     playerMoving = false;
-    animateRig(playerRig, dt, false, 0);
+    updatePlayerAnimation(dt, false, false);
+    return;
+  }
+  if (!playerAlive) {
+    // Freeze locomotion so the Falling Back Death clip can play out in place.
+    playerMoving = false;
+    updatePlayerAnimation(dt, false, false);
     return;
   }
   if (currentVehicle) {
@@ -1387,7 +1531,7 @@ function updatePlayer(dt) {
     showHudMessage(`ENTERING ${d}`);
   }
 
-  animateRig(playerRig, dt, playerMoving, 9);
+  updatePlayerAnimation(dt, playerMoving, sprinting);
 
   if (questStage === 0 && player.position.distanceTo(deliveryPickupPos) < 3) advanceQuest();
   if (questStage === 1 && player.position.distanceTo(deliveryDropPos) < 3) advanceQuest();
