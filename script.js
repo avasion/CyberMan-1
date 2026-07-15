@@ -28,6 +28,7 @@ let clock = new THREE.Clock();
 
 const CITY_HALF = 260; // half extent of the city
 const BLOCK = 26;      // block spacing
+const CHARACTER_HEIGHT = 1.9; // every humanoid is normalized to this height
 
 scene = new THREE.Scene();
 scene.background = new THREE.Color(0x05010a);
@@ -548,6 +549,15 @@ addSlumProps();
 const pedestrians = [];
 const PLAYER_COLLISION_RADIUS = 0.52;
 const PEDESTRIAN_COLLISION_RADIUS = 0.42;
+// Level-of-simulation radii (measured from the player):
+//  - within ACTIVE: full AI + skeletal animation
+//  - ACTIVE..VISIBLE: still rendered, but frozen (no mixer/AI cost)
+//  - beyond VISIBLE: hidden entirely (skips draw, skinning and shadow work)
+// This is what keeps the frame budget flat as the crowd grows.
+const PED_ACTIVE_RADIUS = 80;
+const PED_VISIBLE_RADIUS = 155;
+const PED_ACTIVE_R2 = PED_ACTIVE_RADIUS * PED_ACTIVE_RADIUS;
+const PED_VISIBLE_R2 = PED_VISIBLE_RADIUS * PED_VISIBLE_RADIUS;
 const pedestrianJackets = [0x524f68, 0x5c4a4a, 0x435068, 0x604a5c, 0x4a6050, 0x484556, 0x6e3d5c, 0x3d5c6e];
 const maleJackets = [0x253b5c, 0x3d4658, 0x4d3047, 0x303845, 0x344d48];
 const femaleJackets = [0x8a285c, 0x553d88, 0x117078, 0x7a3d58, 0x9a5a28];
@@ -556,7 +566,7 @@ const pedestrianHair = [0x1a1620, 0x2a2340, 0x4a1030, 0x104a3a, 0x3a2010, 0x1010
 
 function createPedestrian(x, z, gender) {
   gender = gender || (Math.random() < 0.46 ? 'woman' : 'man');
-  const scale = rand(0.85, 1.05);
+  const scale = 1.0; // built at unit scale, then normalized to CHARACTER_HEIGHT below
   const colors = {
     jacket: choice(gender === 'woman' ? femaleJackets : maleJackets),
     pants: choice([0x14131a, 0x1c1a22, 0x201c1c]),
@@ -574,13 +584,20 @@ function createPedestrian(x, z, gender) {
     rig.parts.leftShoulder.parent.add(accent); // attach to hips group (head's parent)
   }
 
+  // Normalize every rig to one uniform height so all NPCs (and the FBX models,
+  // which use the same CHARACTER_HEIGHT) read as the same size.
+  group.updateMatrixWorld(true);
+  const rigBox = new THREE.Box3().setFromObject(group);
+  const rigH = Math.max(0.01, rigBox.max.y - rigBox.min.y);
+  group.scale.setScalar(CHARACTER_HEIGHT / rigH);
+
   group.position.set(x, 0, z);
   group.userData = {
     angle: Math.random()*Math.PI*2,
     speed: rand(0.6, 1.4),
     changeTimer: rand(1,4),
     home: new THREE.Vector3(x,0,z),
-    roam: rand(6, 16),
+    roam: rand(45, 120), // wide territory so they walk real distances, not in place
     collisionRadius: PEDESTRIAN_COLLISION_RADIUS,
     gender: gender,
     rig: rig,
@@ -594,6 +611,34 @@ function createPedestrian(x, z, gender) {
 
 const bullets = [];
 let playerAlive = true;
+let playerDeathHeld = false;   // true once the collapsed death pose is frozen
+let deathScreenShown = false;  // guards the game-over overlay against double-show
+
+// Builds the "YOU WERE TAKEN DOWN" overlay. Called after the death animation
+// has played and the body has been hidden (or on a timer if there's no model).
+function showDeathScreen() {
+  if (deathScreenShown) return;
+  deathScreenShown = true;
+  const ov = document.createElement('div');
+  ov.style.position = 'fixed';
+  ov.style.inset = '0';
+  ov.style.display = 'flex';
+  ov.style.alignItems = 'center';
+  ov.style.justifyContent = 'center';
+  ov.style.background = 'rgba(0, 0, 0, 0.95)';
+  ov.style.color = '#ff4f7a';
+  ov.style.fontFamily = 'Courier New, monospace';
+  ov.style.fontSize = '26px';
+  ov.style.textAlign = 'center';
+  ov.style.padding = '32px';
+  ov.style.lineHeight = '1.6';
+  ov.style.zIndex = '9999';
+  ov.innerHTML = '<div style="max-width:680px;"><div style="font-size:34px; font-weight:700; margin-bottom:24px; letter-spacing:0.18em; color:#ff2f66;">YOU WERE TAKEN DOWN</div><div style="font-size:22px; color:#f0e6ff;">The streets of Neo-Vanguard are hostile.<br>Try again and survive longer.</div><button id="restartBtn" style="margin-top:30px; padding:14px 28px; border:none; border-radius:999px; font-size:16px; cursor:pointer; background:#38f4ff; color:#05010a; font-weight:700; transition:transform .15s ease;">RESTART</button></div>';
+  document.body.appendChild(ov);
+  const btn = document.getElementById('restartBtn');
+  if (btn) btn.addEventListener('click', () => window.location.reload());
+}
+
 function handlePlayerDamage(amount) {
   if (!playerAlive) return;
   playerHealth = Math.max(0, playerHealth - amount);
@@ -604,26 +649,10 @@ function handlePlayerDamage(amount) {
   }
   if (playerHealth <= 0) {
     playerAlive = false;
-    setTimeout(() => {
-      const ov = document.createElement('div');
-      ov.style.position = 'fixed';
-      ov.style.inset = '0';
-      ov.style.display = 'flex';
-      ov.style.alignItems = 'center';
-      ov.style.justifyContent = 'center';
-      ov.style.background = 'rgba(0, 0, 0, 0.95)';
-      ov.style.color = '#ff4f7a';
-      ov.style.fontFamily = 'Courier New, monospace';
-      ov.style.fontSize = '26px';
-      ov.style.textAlign = 'center';
-      ov.style.padding = '32px';
-      ov.style.lineHeight = '1.6';
-      ov.style.zIndex = '9999';
-      ov.innerHTML = '<div style="max-width:680px;"><div style="font-size:34px; font-weight:700; margin-bottom:24px; letter-spacing:0.18em; color:#ff2f66;">YOU WERE TAKEN DOWN</div><div style="font-size:22px; color:#f0e6ff;">The streets of Neo-Vanguard are hostile.<br>Try again and survive longer.</div><button id="restartBtn" style="margin-top:30px; padding:14px 28px; border:none; border-radius:999px; font-size:16px; cursor:pointer; background:#38f4ff; color:#05010a; font-weight:700; transition:transform .15s ease;">RESTART</button></div>';
-      document.body.appendChild(ov);
-      const btn = document.getElementById('restartBtn');
-      if (btn) btn.addEventListener('click', () => window.location.reload());
-    }, 300);
+    // With the animated model, updatePlayerAnimation plays the death clip,
+    // freezes the collapsed pose, hides the body, then calls showDeathScreen().
+    // The procedural fallback has no death clip, so show it on a short timer.
+    if (!playerMixer) setTimeout(showDeathScreen, 1200);
   }
 }
 
@@ -662,12 +691,39 @@ function updateBullets(dt) {
 
 const playerShots = [];
 let playerShotCooldown = 0;
+
+// Gunshot hit effect: a 3-frame burst (the B100_nyknck sprite sheet) that flares
+// on a struck NPC to sell the impact.
+const gunshotFrames = ['B100', 'B101', 'B102'].map(n => new THREE.TextureLoader().load(`B100_nyknck/${n}.png`));
+const gunshots = [];
+function spawnGunshot(x, y, z) {
+  const mat = new THREE.SpriteMaterial({ map: gunshotFrames[0], transparent: true, depthTest: false, blending: THREE.AdditiveBlending });
+  const spr = new THREE.Sprite(mat);
+  spr.position.set(x, y, z);
+  spr.scale.setScalar(1.1);
+  scene.add(spr);
+  gunshots.push({ sprite: spr, mat, t: 0, frame: 0 });
+}
+function updateGunshots(dt) {
+  for (let i = gunshots.length - 1; i >= 0; i--) {
+    const g = gunshots[i];
+    g.t += dt;
+    const frame = Math.min(2, Math.floor(g.t / 0.05));
+    if (frame !== g.frame) { g.frame = frame; g.mat.map = gunshotFrames[frame]; g.mat.needsUpdate = true; }
+    g.mat.opacity = Math.max(0, 1 - g.t / 0.22);
+    g.sprite.scale.setScalar(1.1 + g.t * 2.4); // expanding burst
+    if (g.t > 0.22) { scene.remove(g.sprite); g.mat.dispose(); gunshots.splice(i, 1); }
+  }
+}
+
 function knockDownPedestrian(pedestrian) {
   const ud = pedestrian.userData;
   if (ud.dead) return;
   ud.dead = true;
   ud.isCriminal = false;
-  ud.fallSide = Math.random() < .5 ? -1 : 1;
+  // Pitch (x) is applied relative to heading (y) so the body topples backward,
+  // not sideways — landing flat on its back like a downed/sleeping figure.
+  pedestrian.rotation.order = 'YXZ';
   if (ud.mixer) ud.mixer.stopAllAction();
   if (ud.isQuestTarget) {
     pedestrian.visible = false;
@@ -694,18 +750,34 @@ function firePlayerWeapon(event) {
   const aimPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -1.15);
   if (!cursorRay.ray.intersectPlane(aimPlane, aimPoint)) aimPoint.copy(origin).add(cursorRay.ray.direction.multiplyScalar(40));
   const aim = aimPoint.sub(origin).normalize();
-  const ray = new THREE.Raycaster(origin, aim, 0, 55);
-  const targets = pedestrians.filter(p => p.visible && !p.userData.dead);
-  const hits = ray.intersectObjects(targets, true);
-  const tracer = new THREE.Mesh(new THREE.BoxGeometry(.06,.06, hits.length ? hits[0].distance : 24), new THREE.MeshBasicMaterial({ color:0xffd23f }));
-  tracer.position.copy(origin).addScaledVector(aim, (hits.length ? hits[0].distance : 24) / 2);
+  // Aim-assist targeting: test the shot ray against each NPC's vertical body
+  // capsule instead of raycasting the mesh. Three.js raycasts a SkinnedMesh in
+  // its BIND pose, not the animated pose, so mesh hits land where the character
+  // visibly ISN'T — which made them very hard to click. A generous capsule makes
+  // shooting reliable regardless of the walk animation.
+  const HIT_RADIUS = 1.15;   // horizontal forgiveness around the NPC centre line
+  const torsoY = 1.0;
+  let hitRoot = null, hitT = 24, bestT = Infinity;
+  const proj = new THREE.Vector3();
+  for (const p of pedestrians) {
+    if (!p.visible || p.userData.dead) continue;
+    const cx = p.position.x, cz = p.position.z;
+    const t = (cx - origin.x) * aim.x + (torsoY - origin.y) * aim.y + (cz - origin.z) * aim.z;
+    if (t < 0.4 || t > 55) continue;              // behind the muzzle or out of range
+    proj.copy(origin).addScaledVector(aim, t);     // closest point on the ray
+    const d = Math.hypot(proj.x - cx, proj.z - cz);
+    if (d < HIT_RADIUS && Math.abs(proj.y - torsoY) < 1.3 && t < bestT) {
+      bestT = t; hitRoot = p; hitT = t;
+    }
+  }
+  const tracerLen = hitRoot ? hitT : 24;
+  const tracer = new THREE.Mesh(new THREE.BoxGeometry(.06,.06, tracerLen), new THREE.MeshBasicMaterial({ color:0xffd23f }));
+  tracer.position.copy(origin).addScaledVector(aim, tracerLen / 2);
   tracer.quaternion.setFromUnitVectors(new THREE.Vector3(0,0,1), aim);
   scene.add(tracer);
   playerShots.push({ mesh: tracer, life: .07 });
-  if (!hits.length) return;
-  let hitRoot = hits[0].object;
-  while (hitRoot.parent && pedestrians.indexOf(hitRoot) === -1) hitRoot = hitRoot.parent;
-  if (pedestrians.indexOf(hitRoot) === -1) return;
+  if (!hitRoot) return;
+  spawnGunshot(hitRoot.position.x, 1.15, hitRoot.position.z); // impact flash on every hit
   hitRoot.userData.health = (hitRoot.userData.health || (hitRoot.userData.isQuestTarget ? 4 : 1)) - 1;
   if (hitRoot.userData.isQuestTarget && hitRoot.userData.health > 0) {
     showHudMessage(`RAZOR HIT — ${hitRoot.userData.health} ARMOR`);
@@ -723,7 +795,9 @@ function updatePlayerShots(dt) {
 }
 
 function generatePedestrians() {
-  const total = 140;
+  // Safe to raise now that distance culling bounds per-frame cost to the NPCs
+  // actually near the player rather than the whole population.
+  const total = 200;
   for (let i=0;i<total;i++) {
     let x,z,tries=0;
     do {
@@ -765,27 +839,90 @@ function tintModelMaterials(model, tint) {
       return clone;
     });
     child.material = isMaterialArray ? tintedMaterials : tintedMaterials[0];
-    child.castShadow = true;
+    // Skinned pedestrians do NOT cast shadows: the shadow pass re-skins every
+    // character and is one of the heaviest costs when there are many NPCs. The
+    // hero player model still casts a shadow, so the scene keeps grounding.
+    child.castShadow = false;
     child.receiveShadow = true;
   });
 }
 
+// If a rig is authored Z-up (e.g. the CyberWoman Character-Creator model) it
+// imports lying flat; stand it upright before any measurement.
+function correctUpAxis(model) {
+  model.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(model);
+  if ((box.max.z - box.min.z) > (box.max.y - box.min.y) * 1.4) {
+    model.rotation.x = -Math.PI / 2; // Z-up -> Y-up, head to +Y
+    model.updateMatrixWorld(true);
+  }
+}
+
+// Scale a humanoid so its HEAD JOINT sits at a fixed world height, then drop its
+// feet to the ground. Normalizing by the head bone (not the raw bounding box)
+// means hair, headgear or a held prop above the crown can't shrink the visible
+// body — that inflated box is exactly what made the CyberWoman rig import short.
+// Returns the grounded local Y so an animated bob can be layered on top.
+const HEAD_TARGET_Y = 1.65; // world height of the head joint for every character
+function fitCharacterHeight(model, heightScale) {
+  heightScale = heightScale || 1;
+  correctUpAxis(model);
+  let box = new THREE.Box3().setFromObject(model);
+  let headBone = null;
+  model.traverse(o => {
+    if (o.isBone && !headBone && /head/i.test(o.name) && !/(end|top|nub)/i.test(o.name)) headBone = o;
+  });
+  let scale;
+  if (headBone) {
+    const wp = new THREE.Vector3();
+    headBone.getWorldPosition(wp);
+    scale = (HEAD_TARGET_Y * heightScale) / Math.max(0.01, wp.y - box.min.y);
+  } else {
+    scale = (CHARACTER_HEIGHT * heightScale) / Math.max(0.01, box.max.y - box.min.y);
+  }
+  model.scale.setScalar(scale);
+  model.updateMatrixWorld(true);
+  const grounded = new THREE.Box3().setFromObject(model);
+  model.position.y -= grounded.min.y; // feet on the ground plane
+  model.updateMatrixWorld(true);
+  return model.position.y;
+}
+
+// Remove every translation track so a locomotion clip animates strictly in
+// place (limbs still swing via rotation). Baked-in root motion is what made
+// Nathan's walk visibly snap back to the start each loop.
+function makeClipInPlace(clip) {
+  if (!clip) return clip;
+  clip.tracks = clip.tracks.filter(t => !/\.position$/.test(t.name));
+  return clip;
+}
+
+// Different Mixamo exports prefix bones as "mixamorig" or "mixamorig2"; a clip
+// only binds when its track prefix matches the model's bones. Rewrite the clip's
+// prefix to the target model's so e.g. Sleeping Idle drives the Ch22 skeleton.
+function retargetMixamoClip(clip, model) {
+  if (!clip) return clip;
+  let prefix = null;
+  model.traverse(o => { if (o.isBone && !prefix) { const m = o.name.match(/^(mixamorig\d*)/); if (m) prefix = m[1]; } });
+  if (prefix) clip.tracks.forEach(t => { t.name = t.name.replace(/^mixamorig\d*/, prefix); });
+  return clip;
+}
+
 function replaceWithFBXPedestrian(pedestrian, template, gender, index) {
   const clone = THREE.SkeletonUtils && THREE.SkeletonUtils.clone ? THREE.SkeletonUtils.clone(template) : template.clone(true);
-  const desiredHeight = gender === 'woman' ? 2.0 : 2.12;
-  const box = new THREE.Box3().setFromObject(clone);
-  const height = Math.max(0.01, box.max.y - box.min.y);
-  const modelScale = desiredHeight / height;
-  clone.scale.setScalar(modelScale);
-  clone.updateMatrixWorld(true);
-  const scaledBox = new THREE.Box3().setFromObject(clone);
-  clone.position.y -= scaledBox.min.y;
+  // CyberWoman (women) render 20% larger than everyone else, per design.
+  const groundY = fitCharacterHeight(clone, gender === 'woman' ? 1.2 : 1.0);
   tintModelMaterials(clone, new THREE.Color(gender === 'woman' ? choice([0xff72b8, 0xa985ff, 0x4eeaff]) : choice([0x77a8ff, 0x76d9bb, 0xffb15e])));
 
   pedestrian.clear();
+  // The group carried a scale that normalized the *procedural* rig's height.
+  // fitCharacterHeight already sized the clone, so reset the group to identity —
+  // otherwise the leftover scale shrinks the model (was ~1.36 vs 1.9).
+  pedestrian.scale.setScalar(1);
   pedestrian.add(clone);
   pedestrian.userData.modelled = true;
   pedestrian.userData.rig = null;
+  pedestrian.userData.groundY = groundY;   // feet-on-ground offset the bob adds to
   pedestrian.userData.modelWalkPhase = index * 0.8;
 
   if (template.animations && template.animations.length) {
@@ -803,12 +940,15 @@ function loadPedestrianModel(url, gender) {
   const loader = new THREE.FBXLoader();
   loader.load(url, template => {
     template.updateMatrixWorld(true);
+    // Strip baked root motion so the shared walk clip loops seamlessly in place;
+    // the pedestrian's world position is driven by the wander code instead.
+    if (template.animations && template.animations[0]) makeClipInPlace(template.animations[0]);
     // Two named showcase walkers are placed on the clear spawn plaza so the
     // imported assets are visible immediately in every run.
     const showcasePos = gender === 'woman' ? new THREE.Vector3(5, 0, 4) : new THREE.Vector3(-5, 0, 4);
     const showcase = createPedestrian(showcasePos.x, showcasePos.z, gender);
     showcase.userData.home.copy(showcasePos);
-    showcase.userData.roam = 4;
+    showcase.userData.roam = 30; // roam the plaza instead of circling one spot
     replaceWithFBXPedestrian(showcase, template, gender, 0);
     const candidates = pedestrians.filter(p => p.userData.gender === gender && !p.userData.isQuestTarget)
       .filter(p => p !== showcase)
@@ -860,15 +1000,21 @@ function createVehicle(x, z, direction, speed, color) {
 }
 
 function generateVehicles() {
-  const lanes = [ -48, -14, 14, 48 ];
   const colors = [0xff2fd0, 0x38f4ff, 0xffd23f, 0x7fffd4, 0xff5252];
-  for (let i = 0; i < lanes.length; i++) {
-    const z = lanes[i];
-    createVehicle(-CITY_HALF - 18 - Math.random()*14, z, 'x', rand(4.2, 6.2), choice(colors));
-    createVehicle(CITY_HALF + 18 + Math.random()*14, z, 'x', -rand(4.2, 6.2), choice(colors));
-    const x = lanes[i];
-    createVehicle(x, -CITY_HALF - 18 - Math.random()*14, 'z', rand(4.2, 6.2), choice(colors));
-    createVehicle(x, CITY_HALF + 18 + Math.random()*14, 'z', -rand(4.2, 6.2), choice(colors));
+  // The road grid sits exactly at multiples of BLOCK, so a car only stays on a
+  // road if its fixed (cross-traffic) coordinate is a multiple of BLOCK. Each
+  // car rides one lane off the 6-wide road centre so opposing traffic doesn't
+  // overlap. A car's fixed coordinate never changes as it drives + wraps, so it
+  // remains on that road for its whole run instead of cutting through blocks.
+  const LANE = 1.5;
+  const roads = [-3, -2, -1, 1, 2, 3].map(n => n * BLOCK); // road centre-lines (skip spawn road at 0)
+  for (const c of roads) {
+    // horizontal road at z = c  -> traffic travels along X, one lane each way
+    createVehicle(-CITY_HALF - 18 - Math.random()*14, c - LANE, 'x',  rand(4.2, 6.2), choice(colors));
+    createVehicle( CITY_HALF + 18 + Math.random()*14, c + LANE, 'x', -rand(4.2, 6.2), choice(colors));
+    // vertical road at x = c  -> traffic travels along Z
+    createVehicle(c + LANE, -CITY_HALF - 18 - Math.random()*14, 'z',  rand(4.2, 6.2), choice(colors));
+    createVehicle(c - LANE,  CITY_HALF + 18 + Math.random()*14, 'z', -rand(4.2, 6.2), choice(colors));
   }
 }
 
@@ -1000,7 +1146,7 @@ let playerMoving = false;
 // by binding an AnimationMixer to it — no manual bone remapping required.
 // The procedural rig built above stays as a fallback: it is shown until the
 // FBX finishes downloading and remains the body if the model fails to load.
-const PLAYER_MODEL_HEIGHT = 1.95;
+const PLAYER_MODEL_HEIGHT = CHARACTER_HEIGHT; // match every other character
 let playerModel = null;
 let playerMixer = null;
 const playerActions = {};   // idle | walk | death
@@ -1036,7 +1182,24 @@ function setPlayerAction(name, fade = 0.25) {
 function updatePlayerAnimation(dt, moving, sprinting) {
   if (!playerMixer) { animateRig(playerRig, dt, moving, sprinting ? 12 : 9); return; }
   if (!playerAlive) {
-    setPlayerAction('death', 0.15);
+    setPlayerAction('death', 0.3); // slightly slower blend so the collapse reads
+    // Freeze the settled dead pose, then hide the body a beat later — it
+    // "disappears" before the looping idle can reveal it's still breathing.
+    // Sleeping Idle is a long loop, so cap the hold to ~1.4s.
+    const d = playerActions.death;
+    if (d && !playerDeathHeld) {
+      const dur = d.getClip().duration;
+      if (d.time >= Math.min(1.4, Math.max(0.01, dur - 0.12))) {
+        d.paused = true;
+        playerDeathHeld = true;
+        setTimeout(() => {
+          player.visible = false; // hide body + gun together, before any bind-pose flash
+          showDeathScreen();
+        }, 700);
+      }
+    }
+    playerMixer.update(dt);
+    return;
   } else if (moving) {
     setPlayerAction('walk', 0.2);
     if (playerActions.walk) playerActions.walk.setEffectiveTimeScale(sprinting ? 1.7 : 1.05);
@@ -1052,14 +1215,9 @@ function updatePlayerAnimation(dt, moving, sprinting) {
 }
 
 function setupPlayerModel(model, walkClip, deathClip, idleClip) {
-  // Normalize the raw Mixamo scale (centimetres) to the game's metre scale and
-  // drop the model so its feet rest on the ground plane.
-  const box = new THREE.Box3().setFromObject(model);
-  const height = Math.max(0.01, box.max.y - box.min.y);
-  model.scale.setScalar(PLAYER_MODEL_HEIGHT / height);
-  model.updateMatrixWorld(true);
-  const grounded = new THREE.Box3().setFromObject(model);
-  model.position.y -= grounded.min.y;
+  // Head-bone height fit (same as pedestrians) so the player matches every NPC,
+  // grounded with feet on the floor. Handles Z-up rigs and prop/hair inflation.
+  fitCharacterHeight(model);
   model.traverse(child => {
     if (child.isMesh) {
       child.castShadow = true;
@@ -1101,13 +1259,17 @@ function setupPlayerModel(model, walkClip, deathClip, idleClip) {
   const done = () => {
     if (--pending > 0) return;
     if (!loaded.model) {
-      console.warn('Ch22_nonPBR failed to load; player keeps the procedural rig.');
+      console.error('[player] Ch22_nonPBR.fbx did not load — keeping the procedural rig. ' +
+        'Check the FBXLoader <script> tag and the file path.');
       return;
     }
     const walkClip = loaded.walk && loaded.walk.animations[0]
       ? stripRootMotion(loaded.walk.animations[0]) : null;
+    // Sleeping Idle uses "mixamorig" bones; Ch22 uses "mixamorig2" — rewrite the
+    // prefix so the clip binds. Keep its position tracks: they lower the body to
+    // the floor for the lying-down pose.
     const deathClip = loaded.death && loaded.death.animations[0]
-      ? loaded.death.animations[0] : null;
+      ? retargetMixamoClip(loaded.death.animations[0], loaded.model) : null;
     // Prefer an idle baked into the character; otherwise hold a neutral frame
     // of the walk clip so the player stands naturally instead of in a T-pose.
     let idleClip = loaded.model.animations && loaded.model.animations[0] &&
@@ -1118,14 +1280,18 @@ function setupPlayerModel(model, walkClip, deathClip, idleClip) {
     } else if (idleClip) {
       idleClip.name = 'idle';
     }
+    console.log('[player] Ch22 loaded. Clips —',
+      'walk:', walkClip ? `${walkClip.duration.toFixed(2)}s` : 'MISSING',
+      '| death:', deathClip ? `${deathClip.duration.toFixed(2)}s` : 'MISSING',
+      '| idle:', idleClip ? `${idleClip.name} ${idleClip.duration.toFixed(2)}s` : 'none');
     setupPlayerModel(loaded.model, walkClip, deathClip, idleClip);
   };
   loader.load('./Ch22_nonPBR.fbx', m => { loaded.model = m; done(); },
-    undefined, e => { console.warn('Ch22_nonPBR load error', e); done(); });
+    undefined, e => { console.error('[player] Ch22_nonPBR.fbx load error', e); done(); });
   loader.load('./Walking.fbx', m => { loaded.walk = m; done(); },
-    undefined, e => { console.warn('Walking load error', e); done(); });
-  loader.load('./Falling Back Death.fbx', m => { loaded.death = m; done(); },
-    undefined, e => { console.warn('Falling Back Death load error', e); done(); });
+    undefined, e => { console.error('[player] Walking.fbx load error', e); done(); });
+  loader.load('./Sleeping%20Idle.fbx', m => { loaded.death = m; done(); },
+    undefined, e => { console.error('[player] Sleeping Idle.fbx load error', e); done(); });
 })();
 
 // ---------------------------------------------------------------------------
@@ -1631,8 +1797,11 @@ function updateWaypoint() {
   const target = activeQuestTarget();
   if (!target) { waypointEl.style.display = 'none'; return; }
   const toTarget = target.clone().sub(camera.position); toTarget.y = 0; toTarget.normalize();
-  const angle = Math.atan2(toTarget.x, toTarget.z) - Math.atan2(camFflat.x, camFflat.z);
-  // rotate arrow (rotate so 0 points up)
+  // Screen rotation (CSS clockwise, 0 = up) toward the target: φ = atan2(T·R, T·F)
+  // with the camera's right R = (-Fz, 0, Fx). The bearing difference below equals
+  // -φ in this convention, so negate it — otherwise the arrow points the wrong
+  // way left/right.
+  const angle = -(Math.atan2(toTarget.x, toTarget.z) - Math.atan2(camFflat.x, camFflat.z));
   waypointArrowEl.style.transform = `rotate(${angle}rad)`;
   // show distance
   const dist = Math.round(player.position.distanceTo(target));
@@ -1661,32 +1830,71 @@ function updateCamera() {
 }
 
 function updatePedestrians(dt) {
+  const px = player.position.x, pz = player.position.z;
   for (const p of pedestrians) {
     const ud = p.userData;
+
+    // Level-of-simulation culling: distance to the player decides how much work
+    // this NPC costs this frame.
+    const dx = p.position.x - px, dz = p.position.z - pz;
+    const d2 = dx*dx + dz*dz;
+    if (d2 > PED_VISIBLE_R2) { if (p.visible) p.visible = false; continue; }
+    if (!p.visible) p.visible = true;
+
     if (ud.dead) {
-      // Ease the body onto the pavement and leave it there as a readable
-      // consequence of a successful shot.
-      p.rotation.z += (ud.fallSide * Math.PI / 2 - p.rotation.z) * Math.min(1, dt * 7);
-      p.position.y = Math.max(0, p.position.y - dt * 1.5);
+      // Topple backward and settle flat on the ground — a downed body lying on
+      // its back, mirroring the sleeping/dead pose (the mixamo clip can't bind
+      // to these renderpeople / Character-Creator rigs, so this is procedural).
+      p.rotation.x += (-Math.PI/2 - p.rotation.x) * Math.min(1, dt * 6);
+      p.rotation.z += (0 - p.rotation.z) * Math.min(1, dt * 6);
+      p.position.y += (0.12 - p.position.y) * Math.min(1, dt * 6); // lift so the back doesn't clip
       continue;
     }
+
+    // Rendered but too far to matter: hold the current pose, skip AI + animation.
+    if (d2 > PED_ACTIVE_R2) continue;
+
+    // Wander: hold a heading and keep walking forward, only turning occasionally
+    // or when blocked — so NPCs actually travel through the sector instead of
+    // cycling in place. A soft leash steers them back if they stray too far.
+    if (ud.targetAngle === undefined) ud.targetAngle = ud.angle;
     ud.changeTimer -= dt;
     if (ud.changeTimer <= 0) {
-      ud.angle = Math.random()*Math.PI*2;
-      ud.changeTimer = rand(2,5);
+      // mostly gentle course corrections, occasionally a real turn
+      const turn = Math.random() < 0.75 ? rand(-0.5, 0.5) : rand(-Math.PI*0.9, Math.PI*0.9);
+      ud.targetAngle = ud.angle + turn;
+      ud.changeTimer = rand(2.5, 6);
     }
+    const homeDx = ud.home.x - p.position.x, homeDz = ud.home.z - p.position.z;
+    if (Math.hypot(homeDx, homeDz) > ud.roam) {
+      ud.targetAngle = Math.atan2(homeDx, homeDz); // steer home before straying off
+    }
+
+    // Ease the heading toward the target so turns look like walking, not snapping.
+    let da = ud.targetAngle - ud.angle;
+    while (da > Math.PI) da -= Math.PI*2;
+    while (da < -Math.PI) da += Math.PI*2;
+    ud.angle += da * Math.min(1, dt * 2.5);
+
     const nx = p.position.x + Math.sin(ud.angle)*ud.speed*dt;
     const nz = p.position.z + Math.cos(ud.angle)*ud.speed*dt;
-    const distFromHome = Math.hypot(nx-ud.home.x, nz-ud.home.z);
 
     let moved = false;
-    if (!collides(nx, nz, ud.collisionRadius || PEDESTRIAN_COLLISION_RADIUS, p) && distFromHome < ud.roam) {
+    if (!collides(nx, nz, ud.collisionRadius || PEDESTRIAN_COLLISION_RADIUS, p) &&
+        Math.abs(nx) < CITY_HALF - 4 && Math.abs(nz) < CITY_HALF - 4) {
       p.position.x = nx; p.position.z = nz;
-      p.rotation.y = ud.angle;
       moved = true;
     } else {
-      ud.angle = Math.random()*Math.PI*2;
+      // Blocked by a building or the city edge: turn away and keep going.
+      ud.targetAngle = ud.angle + rand(Math.PI*0.6, Math.PI*1.4);
+      ud.changeTimer = rand(1.5, 3);
     }
+
+    // Smoothly face the direction of travel.
+    let dr = ud.angle - p.rotation.y;
+    while (dr > Math.PI) dr -= Math.PI*2;
+    while (dr < -Math.PI) dr += Math.PI*2;
+    p.rotation.y += dr * Math.min(1, dt * 6);
 
     if (ud.isCriminal && playerAlive && !endgameTriggered) {
       ud.shootTimer -= dt;
@@ -1703,15 +1911,16 @@ function updatePedestrians(dt) {
       }
     }
 
+    const groundY = ud.groundY || 0; // keep feet on the floor while bobbing
     if (ud.mixer) {
       // Nathan's FBX includes a walk clip; if the CyberWoman asset has no
       // clip, the gentle stride/bob still gives it a basic walk motion.
       ud.mixer.update(moved ? dt : 0);
       p.userData.modelWalkPhase += dt * ud.speed * 7;
-      p.children[0].position.y = Math.abs(Math.sin(p.userData.modelWalkPhase)) * (moved ? 0.035 : 0);
+      p.children[0].position.y = groundY + Math.abs(Math.sin(p.userData.modelWalkPhase)) * (moved ? 0.035 : 0);
     } else if (ud.modelled) {
       p.userData.modelWalkPhase += dt * ud.speed * 7;
-      p.children[0].position.y = Math.abs(Math.sin(p.userData.modelWalkPhase)) * (moved ? 0.035 : 0);
+      p.children[0].position.y = groundY + Math.abs(Math.sin(p.userData.modelWalkPhase)) * (moved ? 0.035 : 0);
     } else {
       animateRig(ud.rig, dt, moved, ud.speed*6);
     }
@@ -1727,6 +1936,7 @@ function animate() {
   updateVehicles(dt);
   updateBullets(dt);
   updatePlayerShots(dt);
+  updateGunshots(dt);
   updateCrashCutscene(dt);
   updateStreetProps(clock.elapsedTime);
   updateWaypoint();

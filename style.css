@@ -85,7 +85,7 @@
   #waypointArrow::before { content:''; position:absolute; left:50%; top:-9px; width:0; height:0; transform:translateX(-50%); border-left:10px solid transparent; border-right:10px solid transparent; border-bottom:12px solid #ffd23f; }
   #waypointArrow::after { content:''; position:absolute; left:50%; bottom:-3px; width:13px; height:3px; transform:translateX(-50%); background:#ffd23f; border-radius:2px; }
   #waypointLabel { color:#ffd23f; font-size:12px; text-shadow:0 0 6px #ffd23f; }
-  #soundtrackControls { position:fixed; right:20px; bottom:16px; z-index:16; pointer-events:auto; }
+  #soundtrackControls { position:fixed; right:20px; bottom:56px; z-index:16; pointer-events:auto; }
   #soundtrackToggle { border:1px solid rgba(255,210,63,.62); border-radius:4px; padding:8px 11px; background:rgba(7,4,17,.78); color:#ffd23f; cursor:pointer; font:11px 'Courier New', monospace; letter-spacing:1px; box-shadow:0 0 12px rgba(255,210,63,.16); }
   #soundtrackToggle:hover, #soundtrackToggle[aria-pressed="true"] { background:rgba(255,210,63,.16); box-shadow:0 0 16px rgba(255,210,63,.4); }
   #soundtrackPlayer { position:fixed; width:200px; height:200px; left:-220px; bottom:-220px; overflow:hidden; opacity:0; pointer-events:none; }
